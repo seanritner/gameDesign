@@ -1,3 +1,0 @@
-Key Concepts:
-
-1. The Canvas: Imagine it as a blank whiteboard where you draw your game elements using JavaScript. You can manipulate pixels, draw shapes, and animate them.
