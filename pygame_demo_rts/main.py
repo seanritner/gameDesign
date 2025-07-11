@@ -1,92 +1,59 @@
-import sys
-import bluetooth
-from PIL import Image
-import numpy as np
+import pygame
+from classes.grid import Grid, Resource
+from classes.cursor import Cursor
+from classes.unit import Unit
+from classes.overlay import UnitOverlay
+from classes.unitpath import UnitPath
+from classes.gameboard import GameBoard
 
-def convert_image_to_escpos_raster(filepath, width=384, dither=False):
-    # Load RGBA image and separate alpha mask
-    img_rgba = Image.open(filepath).convert("RGBA")
-    alpha = img_rgba.getchannel("A")
+pygame.init()
 
-    # Flatten onto white background
-    white_bg = Image.new("RGBA", img_rgba.size, (255, 255, 255, 255))
-    flattened = Image.alpha_composite(white_bg, img_rgba).convert("L")
+TILE_SIZE = 40
+WIDTH, HEIGHT = 800, 600
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+clock = pygame.time.Clock()
 
-    # Resize both image and alpha mask
-    height = int(flattened.height * (width / flattened.width))
-    img_resized = flattened.resize((width, height), Image.Resampling.LANCZOS)
-    alpha_resized = alpha.resize((width, height), Image.Resampling.LANCZOS)
+board = GameBoard()
 
-    # Convert alpha to numpy for masking
-    alpha_mask = np.array(alpha_resized, dtype=np.uint8)
-    img_array = np.array(img_resized, dtype=np.uint8)
+def draw_grid():
+    for y in range(board.grid.height):
+        for x in range(board.grid.width):
+            rect = pygame.Rect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE)
+            pygame.draw.rect(screen, (70, 70, 70), rect, 1)
 
-    # Apply alpha mask BEFORE dithering - set transparent areas to white
-    img_array[alpha_mask < 128] = 255
+def draw_cursor():
+    rect = pygame.Rect(board.cursor.x * TILE_SIZE, board.cursor.y * TILE_SIZE, TILE_SIZE, TILE_SIZE)
+    pygame.draw.rect(screen, (255, 255, 0), rect, 3)
 
-    # Convert back to PIL Image for dithering/thresholding
-    img_masked = Image.fromarray(img_array, mode="L")
+def draw_units():
+    for unit in board.units:
+        color = (0, 200, 255) if unit.team == "player" else (255, 60, 60)
+        if unit == board.get_active_unit():
+            color = (0, 255, 0)
+        rect = pygame.Rect(unit.x * TILE_SIZE + 6, unit.y * TILE_SIZE + 6, TILE_SIZE - 12, TILE_SIZE - 12)
+        pygame.draw.rect(screen, color, rect)
+        # Draw HP as text
+        font = pygame.font.SysFont(None, 20)
+        hp_text = font.render(str(unit.hp), True, (255, 255, 255))
+        screen.blit(hp_text, (unit.x * TILE_SIZE + 10, unit.y * TILE_SIZE + 10))
 
-    # Apply dither or threshold
-    if dither:
-        from PIL.Image import Dither
-        img_bw = img_masked.convert("1", dither=Dither.FLOYDSTEINBERG)
-    else:
-        img_bw = img_masked.point(lambda x: 0 if x < 128 else 255, mode="1")
+running = True
+while running:
+    screen.fill((30, 30, 30))
 
-    # Convert to NumPy for final processing
-    bits = np.array(img_bw, dtype=np.uint8)
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
+        elif event.type == pygame.KEYDOWN:
+            board.handle_input(event.key)
 
-    # Invert bits for ESC/POS format (0=black, 1=white)
-    # PIL's mode "1" gives us 0=black, 255=white
-    # But we need 0=white, 1=black for packbits
-    bits_inverted = (bits == 0).astype(np.uint8)
+    board.update()
 
-    # Pack bits into bytes for raster format
-    packed = np.packbits(bits_inverted, axis=1)
-    raster_data = packed.tobytes()
+    draw_grid()
+    draw_units()
+    draw_cursor()
 
-    # ESC/POS header
-    width_bytes = (img_bw.width + 7) // 8
-    xL = width_bytes & 0xFF
-    xH = (width_bytes >> 8) & 0xFF
-    yL = img_bw.height & 0xFF
-    yH = (img_bw.height >> 8) & 0xFF
-    header = b'\x1D\x76\x30\x00' + bytes([xL, xH, yL, yH])
+    pygame.display.flip()
+    clock.tick(60)
 
-    return header + raster_data
-
-def build_command_stream(image_bytes):
-    return (
-        b'\x1D\x67\x39'
-        b'\x1E\x47\x03'
-        b'\x1D\x67\x69'
-        b'\x1B\x40'
-        b'\x1D\x49\xF0\x19'
-        + image_bytes +
-        b'\n\n\n\x1D\x56\x00'
-    )
-
-def main():
-    if len(sys.argv) < 3:
-        print("Usage: print_image_final_clean_mask.py <image.png> <B1:2E:43:42:91:48> [--dither]")
-        sys.exit(1)
-
-    image_path = sys.argv[1]
-    mac = sys.argv[2]
-    dither = "--dither" in sys.argv
-
-    print("Converting image...")
-    img_data = convert_image_to_escpos_raster(image_path, dither=dither)
-    payload = build_command_stream(img_data)
-
-    print(f"Connecting to {mac}...")
-    sock = bluetooth.BluetoothSocket(bluetooth.RFCOMM)
-    sock.connect((mac, 1))
-    print("Sending...")
-    sock.send(payload)
-    sock.close()
-    print("Done.")
-
-if __name__ == "__main__":
-    main()
+pygame.quit()
